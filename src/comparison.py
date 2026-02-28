@@ -2,8 +2,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .ai_detector import AnomalyDetector
-from .controller import diagnose_failure, apply_recovery, mission_damage
+from ai_detector import AnomalyDetector
+from controller import diagnose_failure, apply_recovery, mission_damage
 
 
 def run_scenario(
