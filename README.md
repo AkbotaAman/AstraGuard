@@ -74,6 +74,10 @@ AstraGuard can be deployed as a modular onboard AI layer integrated into satelli
 
 ## How to Run
 
-```bash
-pip install -r requirements.txt
-python src/main.py
+python3 -m pip install -r requirements.txt
+
+# Run CLI simulation (backend MVP)
+python3 src/main.py
+
+# Run interactive web demo (recommended)
+streamlit run app.py
