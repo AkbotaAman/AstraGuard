@@ -1,105 +1,113 @@
-import numpy as np
 import streamlit as st
-import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
-st.set_page_config(page_title="AstraGuard – Interactive MVP", layout="wide")
+st.set_page_config(page_title="AstraGuard — Interactive MVP Demo", layout="wide")
 
-st.title("AstraGuard – Interactive MVP Demo")
-st.caption("AI-powered autonomous onboard protection system (simulation-based MVP).")
+st.title("AstraGuard — Interactive MVP Demo")
+st.caption("Simulation-based MVP: compare Human vs AI anomaly detection & recovery (toy model).")
 
-# --------- Controls ----------
+# --- Controls ---
 with st.sidebar:
     st.header("Simulation Controls")
 
-    failure_start = st.slider("Failure start (t)", 0, 280, 160, 1)
-    severity = st.slider("Severity", 0.50, 2.00, 1.20, 0.01)
-    human_delay = st.slider("Human response delay (steps)", 0, 40, 12, 1)
-    ai_sensitivity = st.slider("AI anomaly detection sensitivity", 0.10, 1.00, 0.60, 0.01)
-
-    run = st.button("Run Simulation")
-
-# --------- Simulation core ----------
-def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
-
-def simulate(failure_start, severity, human_delay, ai_sensitivity, T=300, seed=42):
-    rng = np.random.default_rng(seed)
-
-    t = np.arange(T)
-
-    # baseline telemetry + noise
-    telemetry = 0.02 * rng.normal(size=T)
-
-    # anomaly pattern: spike + drift after failure_start
-    telemetry[failure_start:] += (0.15 * severity) + (0.002 * severity) * (t[failure_start:] - failure_start)
-    telemetry[failure_start:failure_start+5] += 0.35 * severity  # short spike
-
-    # detection probability grows with severity and sensitivity
-    # (not ML training, but a proxy that mimics "stronger detector => earlier/likelier detection")
-    detect_p = sigmoid((severity * 2.2 + ai_sensitivity * 3.0) - 4.0)
-    detected = rng.random() < detect_p
-
-    # response times
-    # AI reacts faster when sensitivity is higher (bounded)
-    ai_delay = int(max(1, round(human_delay * (0.55 - 0.35 * ai_sensitivity))))
-
-    # damage model: bigger severity + slower response => more damage
-    # if not detected => huge delay penalty
-    def damage(delay, detected_flag):
-        effective_delay = delay if detected_flag else delay + 35
-        base = 160 * (severity ** 1.35)
-        return base * (1.0 + effective_delay / 18.0)
-
-    dmg_human = damage(human_delay, True)           # human always "notices", but slow
-    dmg_ai = damage(ai_delay, detected)             # AI may miss at low sensitivity
-
-    # survival score (0..1000)
-    human_survival = max(0.0, 1000.0 - dmg_human)
-    ai_survival = max(0.0, 1000.0 - dmg_ai)
-
-    impact = ai_survival - human_survival  # positive = AI better
-
-    # mark response times on timeline
-    human_action_t = min(T - 1, failure_start + human_delay)
-    ai_action_t = min(T - 1, failure_start + ai_delay) if detected else None
-
-    return {
-        "t": t,
-        "telemetry": telemetry,
-        "human_survival": human_survival,
-        "ai_survival": ai_survival,
-        "impact": impact,
-        "detected": detected,
-        "human_action_t": human_action_t,
-        "ai_action_t": ai_action_t
-    }
-
-# --------- Run / display ----------
-if run:
-    out = simulate(failure_start, severity, human_delay, ai_sensitivity)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("AI survival score", f"{out['ai_survival']:.2f}")
-    c2.metric("Human survival score", f"{out['human_survival']:.2f}")
-    c3.metric("Impact (AI - Human)", f"{out['impact']:.2f}")
-    c4.metric("AI detected anomaly?", "YES" if out["detected"] else "NO")
+    failure_start = st.slider("Failure start (t)", 0, 300, 160)
+    severity = st.slider("Severity", 0.1, 2.0, 1.2, 0.1)
+    anomaly_rate = st.slider("Anomaly frequency (events / 1000 steps)", 0, 40, 12)
+    response_delay = st.slider("Human response delay (steps)", 0, 50, 12)
 
     st.divider()
+    st.subheader("AI Controls")
+    ai_enabled = st.toggle("Enable AI mode", value=True)
+    ai_sensitivity = st.slider("AI detection sensitivity", 0.0, 1.0, 0.65, 0.05)
+    ai_response_speed = st.slider("AI response speed", 0.0, 1.0, 0.60, 0.05)
+    auto_reconfig = st.toggle("Auto reconfigure subsystem", value=True)
 
-    fig = plt.figure()
-    plt.plot(out["t"], out["telemetry"])
-    plt.axvline(failure_start, linestyle="--")
-    plt.axvline(out["human_action_t"], linestyle="--")
-    if out["ai_action_t"] is not None:
-        plt.axvline(out["ai_action_t"], linestyle="--")
-    plt.title("Telemetry timeline (anomaly + response)")
-    plt.xlabel("t (steps)")
-    plt.ylabel("telemetry")
-    st.pyplot(fig)
+    st.divider()
+    seed = st.number_input("Random seed", value=42, step=1)
+    runs = st.slider("Monte-Carlo runs", 5, 50, 20)
 
-    st.caption(
-        "Interpretation: higher severity and higher human delay reduce survival. "
-        "Higher AI sensitivity usually improves outcome, but may still miss at low sensitivity."
-    )
-else:
-    st.info("Adjust parameters on the left and click **Run Simulation**.")
+# --- Core simulation (toy but responsive & consistent) ---
+rng = np.random.default_rng(int(seed))
+
+def clip(x, lo, hi):
+    return float(max(lo, min(hi, x)))
+
+def simulate_one(is_ai: bool):
+    # baseline human detection/recovery depend on severity + anomaly rate
+    base_mttd = 25 + 1.4 * anomaly_rate + 18 * severity
+    base_mttr = 60 + 2.0 * anomaly_rate + 35 * severity + response_delay
+
+    # AI improves detection & recovery
+    if is_ai and ai_enabled:
+        det_gain = 0.15 + 0.70 * ai_sensitivity          # up to ~0.85
+        rec_gain = 0.10 + 0.60 * ai_response_speed        # up to ~0.70
+        if auto_reconfig:
+            rec_gain += 0.10  # extra recovery gain from auto reconfig
+
+        mttd = base_mttd * (1.0 - det_gain)
+        mttr = base_mttr * (1.0 - rec_gain)
+    else:
+        mttd = base_mttd
+        mttr = base_mttr
+
+    # add noise so sliders + runs look real
+    mttd *= rng.normal(1.0, 0.08)
+    mttr *= rng.normal(1.0, 0.10)
+
+    # risk grows with severity, anomaly_rate and slow reaction
+    risk = (severity * 220) + (anomaly_rate * 12) + (mttd * 4.0) + (mttr * 2.5)
+
+    # mission survival score (higher is better)
+    survival = 1000.0 - risk
+    survival = clip(survival, 0.0, 1000.0)
+
+    return mttd, mttr, risk, survival
+
+# Monte Carlo
+rows = []
+for _ in range(int(runs)):
+    hmttd, hmttr, hrisk, hsurv = simulate_one(False)
+    amttd, amttr, arisk, asurv = simulate_one(True)
+    rows.append([hmttd, hmttr, hrisk, hsurv, amttd, amttr, arisk, asurv])
+
+df = pd.DataFrame(rows, columns=[
+    "Human MTTD", "Human MTTR", "Human Risk", "Human Survival",
+    "AI MTTD", "AI MTTR", "AI Risk", "AI Survival"
+])
+
+# Aggregate
+human = df[["Human MTTD","Human MTTR","Human Risk","Human Survival"]].mean()
+ai = df[["AI MTTD","AI MTTR","AI Risk","AI Survival"]].mean()
+
+impact_damage_reduced = human["Human Risk"] - ai["AI Risk"]
+survival_gain = ai["AI Survival"] - human["Human Survival"]
+
+# --- UI output ---
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("AI Survival Score", f"{ai['AI Survival']:.1f}", f"{survival_gain:+.1f} vs Human")
+
+with col2:
+    st.metric("Human Survival Score", f"{human['Human Survival']:.1f}")
+
+with col3:
+    st.metric("Impact / Risk Reduced (Human − AI)", f"{impact_damage_reduced:.1f}")
+
+st.divider()
+
+c1, c2 = st.columns(2)
+with c1:
+    st.subheader("MTTD / MTTR (avg over runs)")
+    st.write(f"**Human MTTD:** {human['Human MTTD']:.1f} steps")
+    st.write(f"**AI MTTD:** {ai['AI MTTD']:.1f} steps")
+    st.write(f"**Human MTTR:** {human['Human MTTR']:.1f} steps")
+    st.write(f"**AI MTTR:** {ai['AI MTTR']:.1f} steps")
+
+with c2:
+    st.subheader("Risk breakdown (toy model)")
+    st.caption("Lower risk is better. This MVP demonstrates relative improvement.")
+    st.dataframe(df.head(10), use_container_width=True)
+
+st.info("Note: This is a simulation-based MVP. The goal is to demonstrate AI-driven reduction in detection and recovery time under anomalies.")
